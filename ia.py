@@ -83,12 +83,17 @@ def _validar(dados):
     return problemas
 
 
-def extrair_dados_com_ia(mensagem):
+def extrair_dados_com_ia(mensagem, categorias=None):
     """Recebe mensagem em português e devolve um dict validado com a transação."""
     if not mensagem or not mensagem.strip():
         raise ValueError("Mensagem vazia.")
 
     data_hoje = datetime.now().strftime("%Y-%m-%d")
+    _cats_instrucao = (
+        f"\nCATEGORIAS PERMITIDAS (use EXATAMENTE uma delas, sem criar novas):\n"
+        + ", ".join(f'"{c}"' for c in categorias)
+        if categorias else ""
+    )
 
     prompt = f"""
 Você é um assistente financeiro que extrai transações de mensagens em português do Brasil.
@@ -103,7 +108,7 @@ Devolva APENAS um JSON válido com os campos abaixo:
 - "responsavel": "Y" (eu), "M" (esposa) ou "MY" (compartilhado). Padrão: "Y".
 - "tipo": para Saída use "P. Unico", "D. Fixa" ou "Parcelado".
           Para Entrada use "Receita Fixa" ou "Receita Variável".
-- "categoria": ex. Alimentação, Transporte, Moradia, Salário, Freelancer.
+- "categoria": escolha a mais adequada da lista abaixo. Proibido inventar categorias novas.{_cats_instrucao}
 - "descricao": local, item ou pagador (ex. "iFood", "Mercado").
 - "valor": número decimal, sem símbolo (ex. 27.50). Vírgula vira ponto.
 - "parcelas": "1" à vista; "N/T" se parcelado (ex. "1/4").
@@ -145,6 +150,75 @@ Saída: {{"movimentacao":"Entrada","responsavel":"Y","tipo":"Receita Variável",
     problemas = _validar(dados)
     if problemas:
         raise ValueError("JSON fora do schema: " + "; ".join(problemas))
+
+    if categorias and dados.get("categoria") not in categorias:
+        raise ValueError(
+            f"Categoria '{dados['categoria']}' não existe no sistema. "
+            "Reformule a mensagem indicando a categoria correta."
+        )
+
+    return dados
+
+
+def extrair_dados_com_ia_imagem(mensagem, bytes_imagem, tipo_mime="image/jpeg", categorias=None):
+    """Extrai dados de transação a partir de bytes de imagem (nota fiscal, comprovante)."""
+    data_hoje = datetime.now().strftime("%Y-%m-%d")
+    _cats_instrucao = (
+        f"\nCATEGORIAS PERMITIDAS (use EXATAMENTE uma delas, sem criar novas):\n"
+        + ", ".join(f'"{c}"' for c in categorias)
+        if categorias else ""
+    )
+
+    prompt_texto = f"""
+Você é um assistente financeiro. Analise esta imagem (nota fiscal, comprovante de pagamento ou foto de despesa).
+Hoje é {data_hoje}.
+Mensagem adicional do usuário: "{mensagem}"
+
+Devolva APENAS um JSON válido com os campos:
+
+- "movimentacao": "Entrada" ou "Saída".
+- "responsavel": "Y", "M" ou "MY". Padrão: "Y".
+- "tipo": para Saída use "P. Unico", "D. Fixa" ou "Parcelado". Para Entrada use "Receita Fixa" ou "Receita Variável".
+- "categoria": escolha a mais adequada da lista abaixo. Proibido inventar categorias novas.{_cats_instrucao}
+- "descricao": nome do estabelecimento ou pagador (ex. "Supermercado Extra").
+- "valor": número decimal sem símbolo (ex. 27.50).
+- "parcelas": "1" à vista ou "N/T" se parcelado.
+- "data": "AAAA-MM-DD". Se não identificar, use {data_hoje}.
+- "fonte": "Dinheiro", "Cartão Crédito" ou "PIX". Padrão: "Dinheiro".
+- "status": "Pago" para Saída ou "Recebido" para Entrada (quando não especificado).
+"""
+
+    try:
+        resposta = cliente.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=[
+                types.Part.from_bytes(data=bytes_imagem, mime_type=tipo_mime),
+                prompt_texto,
+            ],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1,
+            ),
+        )
+    except Exception as err:
+        raise RuntimeError(f"Falha ao chamar Gemini com imagem: {err}") from err
+
+    texto_bruto = resposta.text
+
+    try:
+        dados = json.loads(texto_bruto)
+    except json.JSONDecodeError as err:
+        raise ValueError(f"Gemini devolveu JSON inválido:\n{texto_bruto}") from err
+
+    problemas = _validar(dados)
+    if problemas:
+        raise ValueError("JSON fora do schema: " + "; ".join(problemas))
+
+    if categorias and dados.get("categoria") not in categorias:
+        raise ValueError(
+            f"Categoria '{dados['categoria']}' não existe no sistema. "
+            "Reformule a mensagem indicando a categoria correta."
+        )
 
     return dados
 

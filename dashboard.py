@@ -12,9 +12,10 @@ from db import (
     listar_atrasadas,
     marcar_como_quitado,
     inserir_transacao,
+    listar_categorias,
 )
 
-from utils import formatar_moeda
+from utils import formatar_moeda, enviar_lembrete_twilio
 
 st.set_page_config(page_title="FinAuto", page_icon="💰", layout="wide")
 
@@ -32,6 +33,14 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+@st.cache_data(ttl=300)
+def _get_categorias():
+    try:
+        return listar_categorias()
+    except Exception:
+        return []
+
 
 st.title("💰 FinAuto — Dashboard")
 st.caption("Seu controle financeiro automatizado via WhatsApp.")
@@ -65,14 +74,15 @@ def modal_nova_transacao():
 
         status = st.selectbox("Status", status_opts)
         parcelas = st.text_input("Parcelas", value="1", help="'1' à vista, ou 'N/T' (ex: '2/10')")
-        categoria = st.text_input("Categoria", placeholder="Ex: Alimentação, Salário...")
+        _cats = _get_categorias()
+        categoria = st.selectbox("Categoria", _cats if _cats else ["—"])
 
     descricao = st.text_input("Descrição", placeholder="Ex: Mercado Extra, Freelancer...")
 
     col_s, col_c = st.columns(2)
     with col_s:
         if st.button("💾 Salvar", type="primary", width="stretch"):
-            if not categoria.strip() or not descricao.strip():
+            if not categoria or categoria == "—" or not descricao.strip():
                 st.error("Categoria e descrição são obrigatórias.")
                 return
 
@@ -80,7 +90,7 @@ def modal_nova_transacao():
                 "movimentacao": mov,
                 "responsavel": responsavel_nova,
                 "tipo": tipo,
-                "categoria": categoria.strip(),
+                "categoria": categoria,
                 "descricao": descricao.strip(),
                 "valor": float(valor),
                 "parcelas": parcelas.strip() or "1",
@@ -95,6 +105,82 @@ def modal_nova_transacao():
             except Exception as err:
                 st.error(f"Erro: {err}")
 
+    with col_c:
+        if st.button("❌ Cancelar", width="stretch"):
+            st.rerun()
+
+
+@st.dialog("✏️ Editar transação", width="large")
+def modal_editar_transacao(transacao):
+    mov = st.radio(
+        "Tipo de movimentação",
+        ["Saída", "Entrada"],
+        index=0 if transacao["movimentacao"] == "Saída" else 1,
+        horizontal=True,
+        format_func=lambda m: f"🔴 {m}" if m == "Saída" else f"🟢 {m}",
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        try:
+            data_atual = datetime.strptime(str(transacao["data"]), "%Y-%m-%d").date()
+        except ValueError:
+            data_atual = datetime.now().date()
+        data = st.date_input("Data", value=data_atual)
+        valor = st.number_input("Valor (R$)", min_value=0.01, step=10.0, format="%.2f",
+                                value=float(transacao["valor"]))
+        resp_opts = ["Y", "M", "MY"]
+        responsavel_ed = st.selectbox("Responsável", resp_opts,
+                                      index=resp_opts.index(transacao["responsavel"])
+                                      if transacao["responsavel"] in resp_opts else 0)
+        fonte_opts = ["Dinheiro", "Cartão Crédito", "PIX"]
+        fonte = st.selectbox("Fonte", fonte_opts,
+                             index=fonte_opts.index(transacao["fonte"])
+                             if transacao["fonte"] in fonte_opts else 0)
+
+    with col2:
+        if mov == "Saída":
+            tipo_opts = ["P. Unico", "D. Fixa", "Parcelado"]
+            status_opts = ["Pago", "A pagar", "Atrasado"]
+        else:
+            tipo_opts = ["Receita Fixa", "Receita Variável"]
+            status_opts = ["Recebido", "A receber", "Atrasado"]
+
+        tipo = st.selectbox("Tipo", tipo_opts,
+                            index=tipo_opts.index(transacao["tipo"])
+                            if transacao["tipo"] in tipo_opts else 0)
+        status = st.selectbox("Status", status_opts,
+                              index=status_opts.index(transacao["status"])
+                              if transacao["status"] in status_opts else 0)
+        parcelas = st.text_input("Parcelas", value=str(transacao.get("parcelas", "1")))
+        _cats = _get_categorias()
+        cat_atual = transacao.get("categoria", "")
+        cat_idx = _cats.index(cat_atual) if cat_atual in _cats else 0
+        categoria = st.selectbox("Categoria", _cats if _cats else ["—"], index=cat_idx)
+
+    descricao = st.text_input("Descrição", value=transacao.get("descricao", ""))
+
+    col_s, col_c = st.columns(2)
+    with col_s:
+        if st.button("💾 Salvar", type="primary", width="stretch"):
+            novos_dados = {
+                "movimentacao": mov,
+                "responsavel": responsavel_ed,
+                "tipo": tipo,
+                "categoria": categoria,
+                "descricao": descricao.strip(),
+                "valor": float(valor),
+                "parcelas": parcelas.strip() or "1",
+                "data": data.isoformat(),
+                "fonte": fonte,
+                "status": status,
+            }
+            try:
+                atualizar_transacao(int(transacao["id"]), novos_dados)
+                st.success("Transação atualizada!")
+                st.rerun()
+            except Exception as err:
+                st.error(f"Erro: {err}")
     with col_c:
         if st.button("❌ Cancelar", width="stretch"):
             st.rerun()
@@ -231,21 +317,45 @@ def _render_lista_com_quitar(titulo, transacoes, chave_prefix):
         cor = "🔴" if linha["movimentacao"] == "Saída" else "🟢"
         label_btn = "✅ Pago" if linha["movimentacao"] == "Saída" else "✅ Recebido"
 
-        col_info, col_btn = st.columns([4, 1])
-        with col_info:
+        cols_row = st.columns([4, 1, 1, 1]) if chave_prefix == "prox" else st.columns([4, 1, 1])
+        with cols_row[0]:
             st.markdown(
                 f"{cor} **{linha['data']}** — {linha['descricao']} "
                 f"({linha['categoria']}) — "
                 f"{formatar_moeda(linha['valor']).replace('$', chr(92) + '$')} "
                 f"· {linha['responsavel']}"
             )
-        with col_btn:
-            if st.button(label_btn, key=f"{chave_prefix}_{linha['id']}", width="stretch"):
-                try:
-                    marcar_como_quitado(int(linha["id"]), linha["movimentacao"])
-                    st.rerun()
-                except RuntimeError as err:
-                    st.error(f"Erro: {err}")
+        with cols_row[1]:
+            if st.button("✏️", key=f"edit_{chave_prefix}_{linha['id']}", width="stretch"):
+                modal_editar_transacao(dict(linha))
+        if chave_prefix == "prox":
+            with cols_row[2]:
+                if st.button("📱", key=f"lembrete_{linha['id']}", width="stretch",
+                             help="Enviar lembrete WhatsApp"):
+                    try:
+                        sid = enviar_lembrete_twilio(
+                            linha["responsavel"],
+                            linha["data"],
+                            linha["descricao"],
+                        )
+                        st.success(f"Lembrete enviado! ({sid[:8]}…)")
+                    except RuntimeError as err:
+                        st.error(str(err))
+            with cols_row[3]:
+                if st.button(label_btn, key=f"{chave_prefix}_{linha['id']}", width="stretch"):
+                    try:
+                        marcar_como_quitado(int(linha["id"]), linha["movimentacao"])
+                        st.rerun()
+                    except RuntimeError as err:
+                        st.error(f"Erro: {err}")
+        else:
+            with cols_row[2]:
+                if st.button(label_btn, key=f"{chave_prefix}_{linha['id']}", width="stretch"):
+                    try:
+                        marcar_como_quitado(int(linha["id"]), linha["movimentacao"])
+                        st.rerun()
+                    except RuntimeError as err:
+                        st.error(f"Erro: {err}")
 
 
 atrasadas = listar_atrasadas(responsavel=resp_filtro)
@@ -467,6 +577,8 @@ df_editavel = df[colunas_visiveis].copy()
 df_editavel["data"] = df_editavel["data"].apply(lambda d: d.strftime("%d/%m/%Y"))
 df_editavel["excluir"] = False
 
+_cats_tabela = _get_categorias()
+
 editado = st.data_editor(
     df_editavel,
     width="stretch",
@@ -482,6 +594,8 @@ editado = st.data_editor(
         "status": st.column_config.SelectboxColumn(
             options=["Pago", "Recebido", "A pagar", "A receber", "Atrasado"],
             required=True),
+        "categoria": st.column_config.SelectboxColumn(
+            options=_cats_tabela, required=True) if _cats_tabela else None,
         "valor": st.column_config.NumberColumn(format="R$ %.2f", min_value=0.01),
         "excluir": st.column_config.CheckboxColumn("🗑️"),
     },
@@ -500,8 +614,9 @@ with col_s:
             linha_original = original.loc[id_trans].to_dict()
             linha_nova = novo.loc[id_trans].drop("excluir").to_dict()
 
+            # "data" é desabilitado na tabela — exclui para evitar falso diff por tipo
             diff = {k: v for k, v in linha_nova.items()
-                    if linha_original.get(k) != v}
+                    if k != "data" and str(linha_original.get(k, "")) != str(v)}
 
             if diff:
                 if "valor" in diff:

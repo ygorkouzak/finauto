@@ -65,7 +65,7 @@ def listar_transacoes(ano=None, mes=None, responsavel=None):
     - ano/mes: filtra por período (ex: ano=2026, mes=4)
     - responsavel: "Y", "M" ou "MY"
     """
-    query = supabase.table(TABELA).select("*").order("data", desc=True)
+    query = supabase.table(TABELA).select("*").order("id", desc=True)
 
     if ano and mes:
         data_inicio = f"{ano}-{mes:02d}-01"
@@ -83,6 +83,17 @@ def listar_transacoes(ano=None, mes=None, responsavel=None):
         raise RuntimeError(f"Falha ao ler do Supabase: {err}") from err
 
     return resposta.data
+
+def listar_categorias():
+    """Retorna lista de categorias únicas já cadastradas, ordenadas alfabeticamente."""
+    try:
+        resposta = supabase.table(TABELA).select("categoria").execute()
+    except Exception as err:
+        raise RuntimeError(f"Falha ao ler categorias: {err}") from err
+
+    cats = {row["categoria"] for row in resposta.data if row.get("categoria")}
+    return sorted(cats)
+
 
 def listar_evolucao_mensal(ano, responsavel=None):
     """Retorna todas as transações do ano, para o gráfico de evolução mensal."""
