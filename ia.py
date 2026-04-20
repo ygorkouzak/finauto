@@ -125,7 +125,7 @@ Saída: {{"movimentacao":"Entrada","responsavel":"Y","tipo":"Receita Variável",
 
     try:
         resposta = cliente.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-2.5-flash-lite",
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
