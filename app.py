@@ -29,13 +29,19 @@ def whatsapp():
         return ("", 204)
 
     try:
-        cats_saida = listar_categorias("Saída")
-        cats_entrada = listar_categorias("Entrada")
+        # Busca categorias — falha aqui não bloqueia o registro
+        try:
+            cats_saida = listar_categorias("Saída")
+            cats_entrada = listar_categorias("Entrada")
+            print(f"[APP] Categorias OK: saída={len(cats_saida)} entrada={len(cats_entrada)}")
+        except Exception as err:
+            print(f"[APP] Aviso: não foi possível buscar categorias: {err}")
+            cats_saida, cats_entrada = [], []
+
         if num_media > 0 and media_url:
             if not TWILIO_SID or not TWILIO_TOKEN:
                 raise RuntimeError(
-                    "TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN não configurados no servidor. "
-                    "Envie uma mensagem de texto para registrar."
+                    "TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN não configurados no servidor."
                 )
             r = http_requests.get(
                 media_url,
@@ -43,9 +49,7 @@ def whatsapp():
                 timeout=15,
             )
             if r.status_code == 401:
-                raise RuntimeError(
-                    "Credenciais Twilio inválidas. Configure TWILIO_AUTH_TOKEN no servidor."
-                )
+                raise RuntimeError("Credenciais Twilio inválidas (401).")
             r.raise_for_status()
             dados = extrair_dados_com_ia_imagem(
                 mensagem_recebida, r.content, media_type,
@@ -68,7 +72,10 @@ def whatsapp():
         texto_resposta = "Não consegui entender a transação. Reformule a mensagem."
     except RuntimeError as err:
         print(f"[APP] Falha técnica: {err}")
-        texto_resposta = "Erro no servidor. Tente novamente em instantes."
+        texto_resposta = f"Erro no servidor: {err}"
+    except Exception as err:
+        print(f"[APP] Erro inesperado ({type(err).__name__}): {err}")
+        texto_resposta = f"Erro inesperado: {type(err).__name__}: {err}"
 
     resposta = MessagingResponse()
     resposta.message(texto_resposta)
