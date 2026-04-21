@@ -40,13 +40,17 @@ def enviar_lembrete_twilio(responsavel, data_str, descricao):
     import json
     content_vars = json.dumps({"1": data_str, "2": descricao[:20]})
 
-    client = Client(_TWILIO_SID, _TWILIO_TOKEN)
-    msg = client.messages.create(
-        from_=_TWILIO_FROM,
-        content_sid=_TWILIO_CONTENT_SID,
-        content_variables=content_vars,
-        to=f"whatsapp:{telefone}",
-    )
+    try:
+        client = Client(_TWILIO_SID, _TWILIO_TOKEN)
+        msg = client.messages.create(
+            from_=_TWILIO_FROM,
+            content_sid=_TWILIO_CONTENT_SID,
+            content_variables=content_vars,
+            to=f"whatsapp:{telefone}",
+        )
+    except Exception as err:
+        raise RuntimeError(f"Twilio: {err}") from err
+
     return msg.sid
 
 
