@@ -3,13 +3,20 @@ import requests as http_requests
 from requests.auth import HTTPBasicAuth
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
-from ia import extrair_dados_com_ia, extrair_dados_com_ia_imagem
-from db import inserir_transacao, listar_categorias
+from ia import extrair_dados_com_ia, extrair_dados_com_ia_imagem, extrair_dados_com_ia_audio
+from db import inserir_transacao, listar_categorias, buscar_historico
 
 app = Flask(__name__)
 
 TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+
+# Mapa número → responsável (carregado uma vez na inicialização)
+_PHONE_MAP = {}
+for _resp, _env in [("Y", "PHONE_Y"), ("M", "PHONE_M")]:
+    _num = os.getenv(_env, "").strip()
+    if _num:
+        _PHONE_MAP[_num] = _resp
 
 
 @app.route("/")
@@ -22,21 +29,38 @@ def whatsapp():
     mensagem_recebida = request.form.get("Body", "").strip()
     num_media = int(request.form.get("NumMedia", "0"))
     media_url = request.form.get("MediaUrl0", "")
-    media_type = request.form.get("MediaContentType0", "image/jpeg")
-    print(f"\n[APP] Nova mensagem: {mensagem_recebida} | imagens: {num_media}")
+    media_type = request.form.get("MediaContentType0", "")
+    from_numero = request.form.get("From", "").replace("whatsapp:", "").strip()
+    responsavel = _PHONE_MAP.get(from_numero, "Y")
+    print(f"\n[APP] Nova mensagem: {mensagem_recebida!r} | from: {from_numero} → {responsavel} | mídia: {num_media} {media_type}")
 
     if not mensagem_recebida and num_media == 0:
         return ("", 204)
 
     try:
-        # Busca categorias — falha aqui não bloqueia o registro
+        # Categorias e histórico — falhas não bloqueiam o registro
         try:
             cats_saida = listar_categorias("Saída")
             cats_entrada = listar_categorias("Entrada")
-            print(f"[APP] Categorias OK: saída={len(cats_saida)} entrada={len(cats_entrada)}")
         except Exception as err:
-            print(f"[APP] Aviso: não foi possível buscar categorias: {err}")
+            print(f"[APP] Aviso categorias: {err}")
             cats_saida, cats_entrada = [], []
+
+        try:
+            texto_busca = mensagem_recebida or ""
+            historico = buscar_historico(texto_busca) if texto_busca else []
+            if historico:
+                print(f"[APP] Histórico encontrado: {[h.get('descricao') for h in historico]}")
+        except Exception as err:
+            print(f"[APP] Aviso histórico: {err}")
+            historico = []
+
+        kwargs_ia = dict(
+            categorias_saida=cats_saida,
+            categorias_entrada=cats_entrada,
+            responsavel=responsavel,
+            historico=historico or None,
+        )
 
         if num_media > 0 and media_url:
             if not TWILIO_SID or not TWILIO_TOKEN:
@@ -51,16 +75,17 @@ def whatsapp():
             if r.status_code == 401:
                 raise RuntimeError("Credenciais Twilio inválidas (401).")
             r.raise_for_status()
-            dados = extrair_dados_com_ia_imagem(
-                mensagem_recebida, r.content, media_type,
-                categorias_saida=cats_saida, categorias_entrada=cats_entrada,
-            )
+
+            if media_type.startswith("audio/"):
+                dados = extrair_dados_com_ia_audio(
+                    mensagem_recebida, r.content, media_type, **kwargs_ia
+                )
+            else:
+                dados = extrair_dados_com_ia_imagem(
+                    mensagem_recebida, r.content, media_type or "image/jpeg", **kwargs_ia
+                )
         else:
-            dados = extrair_dados_com_ia(
-                mensagem_recebida,
-                categorias_saida=cats_saida,
-                categorias_entrada=cats_entrada,
-            )
+            dados = extrair_dados_com_ia(mensagem_recebida, **kwargs_ia)
         id_novo = inserir_transacao(dados)
         texto_resposta = (
             f"Registrado! (#{id_novo})\n"

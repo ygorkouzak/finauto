@@ -83,82 +83,101 @@ def _validar(dados):
     return problemas
 
 
-def extrair_dados_com_ia(mensagem, categorias_saida=None, categorias_entrada=None):
+def _instrucoes_enum(data_hoje, cats_saida, cats_entrada, responsavel, historico):
+    """Monta o bloco de regras comuns para todos os prompts."""
+    if responsavel:
+        resp_regra = (
+            f'EXATAMENTE "{responsavel}" — mensagem enviada por este responsável. '
+            f'Só mude se a mensagem indicar explicitamente outro responsável.'
+        )
+    else:
+        resp_regra = 'EXATAMENTE "Y", "M" ou "MY". Padrão: "Y".'
+
+    cats_bloco = ""
+    if cats_saida:
+        cats_bloco += "\n    CATEGORIAS DE SAÍDA: " + ", ".join(f'"{c}"' for c in cats_saida)
+    if cats_entrada:
+        cats_bloco += "\n    CATEGORIAS DE ENTRADA: " + ", ".join(f'"{c}"' for c in cats_entrada)
+
+    historico_bloco = ""
+    if historico:
+        linhas = []
+        for h in historico:
+            linhas.append(
+                f'  • "{h.get("descricao","")}" → {h.get("movimentacao","")}, '
+                f'{h.get("tipo","")}, {h.get("categoria","")}, '
+                f'fonte: {h.get("fonte","")}, status padrão: {h.get("status","")}'
+            )
+        historico_bloco = (
+            "\nHISTÓRICO (use como referência para classificar itens recorrentes):\n"
+            + "\n".join(linhas)
+            + "\nSe a mensagem mencionar algo do histórico, replique a classificação exata."
+        )
+
+    return f"""
+REGRA CRÍTICA: campos com valores fixos aceitam EXATAMENTE os valores listados — nenhum outro.
+
+- "movimentacao": EXATAMENTE "Entrada" ou "Saída".
+- "responsavel": {resp_regra}
+- "tipo":
+    Saída → EXATAMENTE "P. Unico", "D. Fixa" ou "Parcelado".
+    Entrada → EXATAMENTE "Receita Fixa" ou "Receita Variável".
+- "categoria": EXATAMENTE uma da lista. Proibido criar ou adaptar.{cats_bloco}
+- "descricao": nome do local, item ou pagador.
+- "valor": decimal sem símbolo (ex. 27.50). Vírgula → ponto.
+- "parcelas": EXATAMENTE "1" à vista ou "N/T" parcelado (ex. "2/10").
+- "data": EXATO "AAAA-MM-DD". Hoje = {data_hoje}.
+- "fonte": EXATAMENTE "Dinheiro" ou "Cartão Crédito". Padrão: "Dinheiro".
+    PIX, transferência, débito → use "Dinheiro". "Cartão Crédito" só se explicitamente dito.
+- "status":
+    Saída → EXATAMENTE "Pago", "A pagar" ou "Atrasado".
+    Entrada → EXATAMENTE "Recebido", "A receber" ou "Atrasado".
+    Se não informado → "Pago" (Saída) ou "Recebido" (Entrada).
+{historico_bloco}"""
+
+
+def extrair_dados_com_ia(mensagem, categorias_saida=None, categorias_entrada=None,
+                         responsavel=None, historico=None):
     """Recebe mensagem em português e devolve um dict validado com a transação."""
     if not mensagem or not mensagem.strip():
         raise ValueError("Mensagem vazia.")
 
     data_hoje = datetime.now().strftime("%Y-%m-%d")
-    _cats_instrucao = ""
-    if categorias_saida:
-        _cats_instrucao += (
-            "\n    CATEGORIAS DE SAÍDA permitidas (use EXATAMENTE uma): "
-            + ", ".join(f'"{c}"' for c in categorias_saida)
-        )
-    if categorias_entrada:
-        _cats_instrucao += (
-            "\n    CATEGORIAS DE ENTRADA permitidas (use EXATAMENTE uma): "
-            + ", ".join(f'"{c}"' for c in categorias_entrada)
-        )
+    instrucoes = _instrucoes_enum(data_hoje, categorias_saida, categorias_entrada,
+                                  responsavel, historico)
 
-    prompt = f"""
-Você é um assistente financeiro que extrai transações de mensagens em português do Brasil.
+    prompt = f"""Você é um assistente financeiro. Extraia a transação da mensagem abaixo e devolva APENAS um JSON válido.
 Hoje é {data_hoje}.
 
-Mensagem do usuário:
-"{mensagem}"
-
-Devolva APENAS um JSON válido com os campos abaixo.
-REGRA CRÍTICA: os campos com valores fixos só aceitam EXATAMENTE os valores listados — qualquer outro valor é inválido.
-
-- "movimentacao": EXATAMENTE "Entrada" ou "Saída". Nenhum outro valor.
-- "responsavel": EXATAMENTE "Y", "M" ou "MY". Padrão: "Y". Nenhum outro valor.
-- "tipo":
-    Se Saída → EXATAMENTE "P. Unico", "D. Fixa" ou "Parcelado". Nenhum outro valor.
-    Se Entrada → EXATAMENTE "Receita Fixa" ou "Receita Variável". Nenhum outro valor.
-- "categoria": escolha EXATAMENTE uma da lista abaixo. Proibido criar ou adaptar categorias.{_cats_instrucao}
-- "descricao": nome do local, item ou pagador (ex. "iFood", "Mercado").
-- "valor": número decimal sem símbolo (ex. 27.50). Vírgula → ponto.
-- "parcelas": EXATAMENTE "1" se à vista, ou formato "N/T" se parcelado (ex. "2/10"). Nenhum outro formato.
-- "data": formato EXATO "AAAA-MM-DD". Hoje = {data_hoje}.
-- "fonte": EXATAMENTE "Dinheiro" ou "Cartão Crédito". Padrão: "Dinheiro".
-    IMPORTANTE: PIX, transferência, débito ou qualquer outro meio → use "Dinheiro".
-    Só use "Cartão Crédito" se explicitamente mencionado cartão de crédito ou crédito parcelado.
-- "status":
-    Se Saída → EXATAMENTE "Pago", "A pagar" ou "Atrasado". Nenhum outro valor.
-    Se Entrada → EXATAMENTE "Recebido", "A receber" ou "Atrasado". Nenhum outro valor.
-    Se não informado → use "Pago" (Saída) ou "Recebido" (Entrada).
-
+Mensagem: "{mensagem}"
+{instrucoes}
 Exemplos:
-
-Entrada: "gastei 27,50 no ifood hoje"
-Saída: {{"movimentacao":"Saída","responsavel":"Y","tipo":"P. Unico","categoria":"Alimentação","descricao":"iFood","valor":27.50,"parcelas":"1","data":"{data_hoje}","fonte":"Dinheiro","status":"Pago"}}
-
-Entrada: "comprei fone de 800 em 4x no cartão"
-Saída: {{"movimentacao":"Saída","responsavel":"Y","tipo":"Parcelado","categoria":"Eletrônicos","descricao":"Fone","valor":200.00,"parcelas":"1/4","data":"{data_hoje}","fonte":"Cartão Crédito","status":"Pago"}}
-
-Entrada: "recebi 1900 da Alvank via pix"
-Saída: {{"movimentacao":"Entrada","responsavel":"Y","tipo":"Receita Variável","categoria":"Freelancer","descricao":"Alvank","valor":1900.00,"parcelas":"1","data":"{data_hoje}","fonte":"Dinheiro","status":"Recebido"}}
+Entrada "gastei 27,50 no ifood hoje" → {{"movimentacao":"Saída","responsavel":"Y","tipo":"P. Unico","categoria":"Alimentação","descricao":"iFood","valor":27.50,"parcelas":"1","data":"{data_hoje}","fonte":"Dinheiro","status":"Pago"}}
+Entrada "comprei fone 800 em 4x no cartão" → {{"movimentacao":"Saída","responsavel":"Y","tipo":"Parcelado","categoria":"Compras On","descricao":"Fone","valor":200.00,"parcelas":"1/4","data":"{data_hoje}","fonte":"Cartão Crédito","status":"Pago"}}
+Entrada "recebi 1900 da Alvank" → {{"movimentacao":"Entrada","responsavel":"Y","tipo":"Receita Variável","categoria":"Freelancer","descricao":"Alvank","valor":1900.00,"parcelas":"1","data":"{data_hoje}","fonte":"Dinheiro","status":"Recebido"}}
 """
 
+    return _chamar_gemini_e_validar(prompt, categorias_saida, categorias_entrada, "texto")
+
+
+def _chamar_gemini_e_validar(contents, categorias_saida, categorias_entrada, tipo_midia="mídia"):
+    """Chama o Gemini com contents multimodal, parseia e valida o JSON retornado."""
     try:
         resposta = cliente.models.generate_content(
             model="gemini-2.5-flash-lite",
-            contents=prompt,
+            contents=contents,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.1,
             ),
         )
     except Exception as err:
-        raise RuntimeError(f"Falha ao chamar o Gemini: {err}") from err
-
-    texto_bruto = resposta.text
+        raise RuntimeError(f"Falha ao chamar Gemini com {tipo_midia}: {err}") from err
 
     try:
-        dados = json.loads(texto_bruto)
+        dados = json.loads(resposta.text)
     except json.JSONDecodeError as err:
-        raise ValueError(f"Gemini devolveu JSON inválido:\n{texto_bruto}") from err
+        raise ValueError(f"Gemini devolveu JSON inválido:\n{resposta.text}") from err
 
     problemas = _validar(dados)
     if problemas:
@@ -171,83 +190,43 @@ Saída: {{"movimentacao":"Entrada","responsavel":"Y","tipo":"Receita Variável",
             f"Categoria '{dados['categoria']}' não existe para {mov}. "
             "Reformule a mensagem indicando a categoria correta."
         )
-
     return dados
 
 
 def extrair_dados_com_ia_imagem(mensagem, bytes_imagem, tipo_mime="image/jpeg",
-                               categorias_saida=None, categorias_entrada=None):
+                                categorias_saida=None, categorias_entrada=None,
+                                responsavel=None, historico=None):
     """Extrai dados de transação a partir de bytes de imagem (nota fiscal, comprovante)."""
     data_hoje = datetime.now().strftime("%Y-%m-%d")
-    _cats_instrucao = ""
-    if categorias_saida:
-        _cats_instrucao += (
-            "\n    CATEGORIAS DE SAÍDA permitidas: "
-            + ", ".join(f'"{c}"' for c in categorias_saida)
-        )
-    if categorias_entrada:
-        _cats_instrucao += (
-            "\n    CATEGORIAS DE ENTRADA permitidas: "
-            + ", ".join(f'"{c}"' for c in categorias_entrada)
-        )
+    instrucoes = _instrucoes_enum(data_hoje, categorias_saida, categorias_entrada,
+                                  responsavel, historico)
+    prompt_texto = (
+        f"Você é um assistente financeiro. Analise a imagem (nota fiscal, comprovante ou foto de despesa).\n"
+        f"Hoje é {data_hoje}. Mensagem adicional: \"{mensagem}\"\n"
+        f"Devolva APENAS um JSON válido.\n{instrucoes}"
+    )
+    return _chamar_gemini_e_validar(
+        [types.Part.from_bytes(data=bytes_imagem, mime_type=tipo_mime), prompt_texto],
+        categorias_saida, categorias_entrada, "imagem",
+    )
 
-    prompt_texto = f"""
-Você é um assistente financeiro. Analise esta imagem (nota fiscal, comprovante ou foto de despesa).
-Hoje é {data_hoje}.
-Mensagem adicional do usuário: "{mensagem}"
 
-Devolva APENAS um JSON válido. Os campos com valores fixos só aceitam EXATAMENTE os valores listados.
-
-- "movimentacao": EXATAMENTE "Entrada" ou "Saída".
-- "responsavel": EXATAMENTE "Y", "M" ou "MY". Padrão: "Y".
-- "tipo":
-    Se Saída → EXATAMENTE "P. Unico", "D. Fixa" ou "Parcelado".
-    Se Entrada → EXATAMENTE "Receita Fixa" ou "Receita Variável".
-- "categoria": EXATAMENTE uma da lista abaixo. Proibido criar ou adaptar.{_cats_instrucao}
-- "descricao": nome do estabelecimento ou pagador (ex. "Supermercado Extra").
-- "valor": número decimal sem símbolo (ex. 27.50).
-- "parcelas": EXATAMENTE "1" se à vista ou formato "N/T" (ex. "2/10").
-- "data": formato EXATO "AAAA-MM-DD". Se não identificar, use {data_hoje}.
-- "fonte": EXATAMENTE "Dinheiro" ou "Cartão Crédito". Padrão: "Dinheiro".
-    PIX, débito, transferência → use "Dinheiro". Só "Cartão Crédito" se explicitamente indicado.
-- "status": Se Saída → "Pago", "A pagar" ou "Atrasado". Se Entrada → "Recebido", "A receber" ou "Atrasado".
-"""
-
-    try:
-        resposta = cliente.models.generate_content(
-            model="gemini-2.5-flash-lite",
-            contents=[
-                types.Part.from_bytes(data=bytes_imagem, mime_type=tipo_mime),
-                prompt_texto,
-            ],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.1,
-            ),
-        )
-    except Exception as err:
-        raise RuntimeError(f"Falha ao chamar Gemini com imagem: {err}") from err
-
-    texto_bruto = resposta.text
-
-    try:
-        dados = json.loads(texto_bruto)
-    except json.JSONDecodeError as err:
-        raise ValueError(f"Gemini devolveu JSON inválido:\n{texto_bruto}") from err
-
-    problemas = _validar(dados)
-    if problemas:
-        raise ValueError("JSON fora do schema: " + "; ".join(problemas))
-
-    mov = dados.get("movimentacao")
-    cats_validas = categorias_saida if mov == "Saída" else categorias_entrada
-    if cats_validas and dados.get("categoria") not in cats_validas:
-        raise ValueError(
-            f"Categoria '{dados['categoria']}' não existe para {mov}. "
-            "Reformule a mensagem indicando a categoria correta."
-        )
-
-    return dados
+def extrair_dados_com_ia_audio(mensagem, bytes_audio, tipo_mime="audio/ogg",
+                               categorias_saida=None, categorias_entrada=None,
+                               responsavel=None, historico=None):
+    """Extrai dados de transação a partir de áudio (mensagem de voz do WhatsApp)."""
+    data_hoje = datetime.now().strftime("%Y-%m-%d")
+    instrucoes = _instrucoes_enum(data_hoje, categorias_saida, categorias_entrada,
+                                  responsavel, historico)
+    prompt_texto = (
+        f"Você é um assistente financeiro. Transcreva o áudio e extraia a transação financeira mencionada.\n"
+        f"Hoje é {data_hoje}. Texto adicional do usuário: \"{mensagem}\"\n"
+        f"Devolva APENAS um JSON válido.\n{instrucoes}"
+    )
+    return _chamar_gemini_e_validar(
+        [types.Part.from_bytes(data=bytes_audio, mime_type=tipo_mime), prompt_texto],
+        categorias_saida, categorias_entrada, "áudio",
+    )
 
 
 if __name__ == "__main__":

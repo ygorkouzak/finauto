@@ -98,6 +98,32 @@ def listar_categorias(movimentacao=None):
     return sorted(cats)
 
 
+def buscar_historico(texto, limite=3):
+    """
+    Busca transações anteriores cuja descrição contenha palavras do texto.
+    Usado para dar contexto à IA sobre padrões recorrentes (ex: 'energia' → D. Fixa).
+    """
+    palavras = [p for p in texto.lower().split() if len(p) > 2]
+    vistos = {}
+    for palavra in palavras[:4]:
+        try:
+            r = (
+                supabase.table(TABELA)
+                .select("descricao, movimentacao, tipo, categoria, fonte, status, responsavel")
+                .ilike("descricao", f"%{palavra}%")
+                .order("id", desc=True)
+                .limit(limite)
+                .execute()
+            )
+            for row in r.data:
+                key = row.get("descricao", "").lower()
+                if key not in vistos:
+                    vistos[key] = row
+        except Exception:
+            pass
+    return list(vistos.values())[:limite]
+
+
 def listar_evolucao_mensal(ano, responsavel=None):
     """Retorna todas as transações do ano, para o gráfico de evolução mensal."""
     query = (
