@@ -179,6 +179,11 @@ def _chamar_gemini_e_validar(contents, categorias_saida, categorias_entrada, tip
     except json.JSONDecodeError as err:
         raise ValueError(f"Gemini devolveu JSON inválido:\n{resposta.text}") from err
 
+    if isinstance(dados, list):
+        if not dados:
+            raise ValueError("Gemini devolveu lista vazia.")
+        dados = dados[0]
+
     problemas = _validar(dados)
     if problemas:
         raise ValueError("JSON fora do schema: " + "; ".join(problemas))
