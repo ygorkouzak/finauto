@@ -31,7 +31,20 @@ def whatsapp():
     try:
         cats = listar_categorias()
         if num_media > 0 and media_url:
-            r = http_requests.get(media_url, auth=HTTPBasicAuth(TWILIO_SID, TWILIO_TOKEN), timeout=10)
+            if not TWILIO_SID or not TWILIO_TOKEN:
+                raise RuntimeError(
+                    "TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN não configurados no servidor. "
+                    "Envie uma mensagem de texto para registrar."
+                )
+            r = http_requests.get(
+                media_url,
+                auth=HTTPBasicAuth(TWILIO_SID, TWILIO_TOKEN),
+                timeout=15,
+            )
+            if r.status_code == 401:
+                raise RuntimeError(
+                    "Credenciais Twilio inválidas. Configure TWILIO_AUTH_TOKEN no servidor."
+                )
             r.raise_for_status()
             dados = extrair_dados_com_ia_imagem(mensagem_recebida, r.content, media_type, categorias=cats)
         else:
