@@ -35,9 +35,9 @@ st.markdown(
 )
 
 @st.cache_data(ttl=300)
-def _get_categorias():
+def _get_categorias(movimentacao=None):
     try:
-        return listar_categorias()
+        return listar_categorias(movimentacao)
     except Exception:
         return []
 
@@ -74,7 +74,7 @@ def modal_nova_transacao():
 
         status = st.selectbox("Status", status_opts)
         parcelas = st.text_input("Parcelas", value="1", help="'1' à vista, ou 'N/T' (ex: '2/10')")
-        _cats = _get_categorias()
+        _cats = _get_categorias(mov)
         categoria = st.selectbox("Categoria", _cats if _cats else ["—"])
 
     descricao = st.text_input("Descrição", placeholder="Ex: Mercado Extra, Freelancer...")
@@ -153,7 +153,7 @@ def modal_editar_transacao(transacao):
                               index=status_opts.index(transacao["status"])
                               if transacao["status"] in status_opts else 0)
         parcelas = st.text_input("Parcelas", value=str(transacao.get("parcelas", "1")))
-        _cats = _get_categorias()
+        _cats = _get_categorias(mov)
         cat_atual = transacao.get("categoria", "")
         cat_idx = _cats.index(cat_atual) if cat_atual in _cats else 0
         categoria = st.selectbox("Categoria", _cats if _cats else ["—"], index=cat_idx)
@@ -232,6 +232,19 @@ with st.sidebar:
         format_func=lambda m: f"🟢 {m}" if m == "Entrada" else f"🔴 {m}",
     )
 
+    _cats_saida_todas = _get_categorias("Saída")
+    _cats_entrada_todas = _get_categorias("Entrada")
+    cats_saida_sel = st.multiselect(
+        "Categorias Saída",
+        _cats_saida_todas,
+        placeholder="Todas",
+    )
+    cats_entrada_sel = st.multiselect(
+        "Categorias Entrada",
+        _cats_entrada_todas,
+        placeholder="Todas",
+    )
+
     busca = st.text_input("Buscar descrição", placeholder="Ex: Felipe, Cartão...")
 
 resp_filtro = None if responsavel == "Todos" else responsavel
@@ -256,6 +269,10 @@ if status_sel:
     df = df[df["status"].isin(status_sel)]
 if movimentacao_sel:
     df = df[df["movimentacao"].isin(movimentacao_sel)]
+if cats_saida_sel:
+    df = df[~((df["movimentacao"] == "Saída") & (~df["categoria"].isin(cats_saida_sel)))]
+if cats_entrada_sel:
+    df = df[~((df["movimentacao"] == "Entrada") & (~df["categoria"].isin(cats_entrada_sel)))]
 if busca:
     df = df[df["descricao"].str.contains(busca, case=False, na=False)]
 
@@ -577,7 +594,7 @@ df_editavel = df[colunas_visiveis].copy()
 df_editavel["data"] = df_editavel["data"].apply(lambda d: d.strftime("%d/%m/%Y"))
 df_editavel["excluir"] = False
 
-_cats_tabela = _get_categorias()
+_cats_tabela = sorted(set(_get_categorias("Saída") + _get_categorias("Entrada")))
 
 editado = st.data_editor(
     df_editavel,

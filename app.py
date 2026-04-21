@@ -29,7 +29,8 @@ def whatsapp():
         return ("", 204)
 
     try:
-        cats = listar_categorias()
+        cats_saida = listar_categorias("Saída")
+        cats_entrada = listar_categorias("Entrada")
         if num_media > 0 and media_url:
             if not TWILIO_SID or not TWILIO_TOKEN:
                 raise RuntimeError(
@@ -46,9 +47,16 @@ def whatsapp():
                     "Credenciais Twilio inválidas. Configure TWILIO_AUTH_TOKEN no servidor."
                 )
             r.raise_for_status()
-            dados = extrair_dados_com_ia_imagem(mensagem_recebida, r.content, media_type, categorias=cats)
+            dados = extrair_dados_com_ia_imagem(
+                mensagem_recebida, r.content, media_type,
+                categorias_saida=cats_saida, categorias_entrada=cats_entrada,
+            )
         else:
-            dados = extrair_dados_com_ia(mensagem_recebida, categorias=cats)
+            dados = extrair_dados_com_ia(
+                mensagem_recebida,
+                categorias_saida=cats_saida,
+                categorias_entrada=cats_entrada,
+            )
         id_novo = inserir_transacao(dados)
         texto_resposta = (
             f"Registrado! (#{id_novo})\n"

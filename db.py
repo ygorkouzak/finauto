@@ -84,10 +84,13 @@ def listar_transacoes(ano=None, mes=None, responsavel=None):
 
     return resposta.data
 
-def listar_categorias():
-    """Retorna lista de categorias únicas já cadastradas, ordenadas alfabeticamente."""
+def listar_categorias(movimentacao=None):
+    """Retorna categorias únicas. Se movimentacao='Entrada'/'Saída', filtra por tipo."""
     try:
-        resposta = supabase.table(TABELA).select("categoria").execute()
+        query = supabase.table(TABELA).select("categoria, movimentacao")
+        if movimentacao:
+            query = query.eq("movimentacao", movimentacao)
+        resposta = query.execute()
     except Exception as err:
         raise RuntimeError(f"Falha ao ler categorias: {err}") from err
 

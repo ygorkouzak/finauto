@@ -83,17 +83,23 @@ def _validar(dados):
     return problemas
 
 
-def extrair_dados_com_ia(mensagem, categorias=None):
+def extrair_dados_com_ia(mensagem, categorias_saida=None, categorias_entrada=None):
     """Recebe mensagem em português e devolve um dict validado com a transação."""
     if not mensagem or not mensagem.strip():
         raise ValueError("Mensagem vazia.")
 
     data_hoje = datetime.now().strftime("%Y-%m-%d")
-    _cats_instrucao = (
-        f"\nCATEGORIAS PERMITIDAS (use EXATAMENTE uma delas, sem criar novas):\n"
-        + ", ".join(f'"{c}"' for c in categorias)
-        if categorias else ""
-    )
+    _cats_instrucao = ""
+    if categorias_saida:
+        _cats_instrucao += (
+            "\n    CATEGORIAS DE SAÍDA permitidas (use EXATAMENTE uma): "
+            + ", ".join(f'"{c}"' for c in categorias_saida)
+        )
+    if categorias_entrada:
+        _cats_instrucao += (
+            "\n    CATEGORIAS DE ENTRADA permitidas (use EXATAMENTE uma): "
+            + ", ".join(f'"{c}"' for c in categorias_entrada)
+        )
 
     prompt = f"""
 Você é um assistente financeiro que extrai transações de mensagens em português do Brasil.
@@ -158,23 +164,32 @@ Saída: {{"movimentacao":"Entrada","responsavel":"Y","tipo":"Receita Variável",
     if problemas:
         raise ValueError("JSON fora do schema: " + "; ".join(problemas))
 
-    if categorias and dados.get("categoria") not in categorias:
+    mov = dados.get("movimentacao")
+    cats_validas = categorias_saida if mov == "Saída" else categorias_entrada
+    if cats_validas and dados.get("categoria") not in cats_validas:
         raise ValueError(
-            f"Categoria '{dados['categoria']}' não existe no sistema. "
+            f"Categoria '{dados['categoria']}' não existe para {mov}. "
             "Reformule a mensagem indicando a categoria correta."
         )
 
     return dados
 
 
-def extrair_dados_com_ia_imagem(mensagem, bytes_imagem, tipo_mime="image/jpeg", categorias=None):
+def extrair_dados_com_ia_imagem(mensagem, bytes_imagem, tipo_mime="image/jpeg",
+                               categorias_saida=None, categorias_entrada=None):
     """Extrai dados de transação a partir de bytes de imagem (nota fiscal, comprovante)."""
     data_hoje = datetime.now().strftime("%Y-%m-%d")
-    _cats_instrucao = (
-        f"\nCATEGORIAS PERMITIDAS (use EXATAMENTE uma delas, sem criar novas):\n"
-        + ", ".join(f'"{c}"' for c in categorias)
-        if categorias else ""
-    )
+    _cats_instrucao = ""
+    if categorias_saida:
+        _cats_instrucao += (
+            "\n    CATEGORIAS DE SAÍDA permitidas: "
+            + ", ".join(f'"{c}"' for c in categorias_saida)
+        )
+    if categorias_entrada:
+        _cats_instrucao += (
+            "\n    CATEGORIAS DE ENTRADA permitidas: "
+            + ", ".join(f'"{c}"' for c in categorias_entrada)
+        )
 
     prompt_texto = f"""
 Você é um assistente financeiro. Analise esta imagem (nota fiscal, comprovante ou foto de despesa).
@@ -224,9 +239,11 @@ Devolva APENAS um JSON válido. Os campos com valores fixos só aceitam EXATAMEN
     if problemas:
         raise ValueError("JSON fora do schema: " + "; ".join(problemas))
 
-    if categorias and dados.get("categoria") not in categorias:
+    mov = dados.get("movimentacao")
+    cats_validas = categorias_saida if mov == "Saída" else categorias_entrada
+    if cats_validas and dados.get("categoria") not in cats_validas:
         raise ValueError(
-            f"Categoria '{dados['categoria']}' não existe no sistema. "
+            f"Categoria '{dados['categoria']}' não existe para {mov}. "
             "Reformule a mensagem indicando a categoria correta."
         )
 
