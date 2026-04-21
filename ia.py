@@ -174,12 +174,13 @@ def _chamar_gemini_e_validar(contents, categorias_saida, categorias_entrada, tip
     except Exception as err:
         raise RuntimeError(f"Falha ao chamar Gemini com {tipo_midia}: {err}") from err
 
+    print(f"[IA] Resposta bruta ({tipo_midia}): {resposta.text[:300]}")
     try:
         dados = json.loads(resposta.text)
     except json.JSONDecodeError as err:
         raise ValueError(f"Gemini devolveu JSON inválido:\n{resposta.text}") from err
 
-    if isinstance(dados, list):
+    while isinstance(dados, list):
         if not dados:
             raise ValueError("Gemini devolveu lista vazia.")
         dados = dados[0]
