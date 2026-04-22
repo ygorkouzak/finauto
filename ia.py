@@ -200,7 +200,7 @@ def _chamar_gemini_e_validar(contents, categorias_saida, categorias_entrada, tip
     """Chama o Gemini com contents multimodal, parseia e valida o JSON retornado."""
     try:
         resposta = cliente.models.generate_content(
-            model="gemini-2.0-flash-lite",
+            model="gemini-2.0-flash",
             contents=contents,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
