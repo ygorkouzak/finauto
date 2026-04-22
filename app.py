@@ -140,7 +140,7 @@ def whatsapp():
 
         # Gera recorrências automáticas para D. Fixa e Parcelado.
         qtd_rec = 0
-        if dados.get("tipo") in ("D. Fixa", "Parcelado"):
+        if dados.get("tipo") in ("D. Fixa", "Receita Fixa", "Parcelado"):
             try:
                 qtd_rec = gerar_recorrencias(id_novo)
             except Exception as err:

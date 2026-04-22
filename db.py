@@ -354,7 +354,7 @@ def gerar_recorrencias(id_transacao):
 
     t = resp.data[0]
     tipo = t.get("tipo", "")
-    if tipo not in ("D. Fixa", "Parcelado"):
+    if tipo not in ("D. Fixa", "Receita Fixa", "Parcelado"):
         return 0
 
     data_base = date.fromisoformat(t["data"])
@@ -385,7 +385,7 @@ def gerar_recorrencias(id_transacao):
             except Exception as err:
                 print(f"[DB] Aviso recorrência Parcelado: {err}")
 
-    elif tipo == "D. Fixa":
+    elif tipo in ("D. Fixa", "Receita Fixa"):
         horizonte = hoje + relativedelta(months=12)
         proximo = data_base + relativedelta(months=1)
         while proximo <= horizonte:
@@ -397,7 +397,7 @@ def gerar_recorrencias(id_transacao):
                     supabase.table(TABELA).insert(novo).execute()
                     inseridos += 1
                 except Exception as err:
-                    print(f"[DB] Aviso recorrência D.Fixa: {err}")
+                    print(f"[DB] Aviso recorrência {tipo}: {err}")
             proximo += relativedelta(months=1)
 
     print(f"[DB] Geradas {inseridos} recorrências para id={id_transacao} (tipo={tipo})")
@@ -415,7 +415,7 @@ def gerar_recorrencias_retroativas():
         resp = (
             supabase.table(TABELA)
             .select("*")
-            .in_("tipo", ["D. Fixa", "Parcelado"])
+            .in_("tipo", ["D. Fixa", "Receita Fixa", "Parcelado"])
             .order("data")
             .execute()
         )
@@ -429,7 +429,7 @@ def gerar_recorrencias_retroativas():
         tipo = t["tipo"]
         chave = (t["descricao"].lower().strip(), t["responsavel"])
 
-        if tipo == "D. Fixa":
+        if tipo in ("D. Fixa", "Receita Fixa"):
             if chave not in vistos_fixas:
                 vistos_fixas[chave] = t["id"]
 
