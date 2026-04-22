@@ -248,8 +248,17 @@ def _parsear_e_validar(texto_json: str, categorias_saida, categorias_entrada, pr
             raise ValueError("IA marcou precisa_perguntar mas não enviou pergunta.")
         raise PrecisaPerguntar(pergunta.strip())
 
+    faltando = CAMPOS_OBRIGATORIOS - dados.keys()
+    if "valor" in faltando:
+        raise PrecisaPerguntar("Qual é o valor da transação? (em R$)")
+
     problemas = _validar(dados)
     if problemas:
+        # Se o único problema for valor ausente ou inválido, pergunte em vez de errar
+        problemas_valor = [p for p in problemas if "valor" in p]
+        outros = [p for p in problemas if "valor" not in p]
+        if problemas_valor and not outros:
+            raise PrecisaPerguntar("Qual é o valor da transação? (em R$)")
         raise ValueError("JSON fora do schema: " + "; ".join(problemas))
 
     mov = dados.get("movimentacao")
