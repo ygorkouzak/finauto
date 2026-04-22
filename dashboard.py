@@ -13,6 +13,7 @@ from db import (
     marcar_como_quitado,
     inserir_transacao,
     listar_categorias,
+    gerar_recorrencias_retroativas,
 )
 
 from utils import formatar_moeda, enviar_lembrete_twilio
@@ -246,6 +247,19 @@ with st.sidebar:
     )
 
     busca = st.text_input("Buscar descrição", placeholder="Ex: Felipe, Cartão...")
+
+    st.divider()
+    if st.button("🔄 Gerar Recorrências", help="Preenche meses faltantes para D. Fixa e Parcelado"):
+        with st.spinner("Gerando recorrências..."):
+            try:
+                qtd = gerar_recorrencias_retroativas()
+                if qtd:
+                    st.success(f"{qtd} recorrências geradas.")
+                    st.rerun()
+                else:
+                    st.info("Nenhuma recorrência nova a gerar.")
+            except Exception as e:
+                st.error(f"Erro: {e}")
 
 resp_filtro = None if responsavel == "Todos" else responsavel
 mes_filtro = None if mes_sel == "Todos" else mes_sel

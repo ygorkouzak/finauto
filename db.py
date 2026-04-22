@@ -313,6 +313,155 @@ def marcar_como_quitado(id_transacao, movimentacao):
     print(f"[DB] Quitado id={id_transacao} -> {novo_status}")
 
 
+def _ja_existe_no_mes(descricao, responsavel, ano, mes):
+    """Retorna True se já há transação com essa descrição+responsável nesse mês."""
+    try:
+        prox_mes = mes + 1 if mes < 12 else 1
+        prox_ano = ano if mes < 12 else ano + 1
+        resp = (
+            supabase.table(TABELA)
+            .select("id")
+            .ilike("descricao", descricao)
+            .eq("responsavel", responsavel)
+            .gte("data", f"{ano}-{mes:02d}-01")
+            .lt("data", f"{prox_ano}-{prox_mes:02d}-01")
+            .limit(1)
+            .execute()
+        )
+        return len(resp.data) > 0
+    except Exception:
+        return False
+
+
+def gerar_recorrencias(id_transacao):
+    """
+    Gera recorrências futuras para uma transação D. Fixa ou Parcelado.
+    D. Fixa: uma entrada por mês até 12 meses a frente do dia de hoje.
+    Parcelado: parcelas N+1 até o total, cada uma no mês seguinte.
+    Pula meses que já possuem entrada com mesma descrição+responsável.
+    Retorna quantidade de registros inseridos.
+    """
+    from dateutil.relativedelta import relativedelta
+    from datetime import date
+
+    try:
+        resp = supabase.table(TABELA).select("*").eq("id", id_transacao).execute()
+    except Exception as err:
+        raise RuntimeError(f"Transação {id_transacao} não encontrada: {err}") from err
+
+    if not resp.data:
+        raise RuntimeError(f"Transação {id_transacao} não encontrada")
+
+    t = resp.data[0]
+    tipo = t.get("tipo", "")
+    if tipo not in ("D. Fixa", "Parcelado"):
+        return 0
+
+    data_base = date.fromisoformat(t["data"])
+    hoje = date.today()
+    base = {k: v for k, v in t.items() if k != "id"}
+    inseridos = 0
+
+    if tipo == "Parcelado":
+        parcelas_str = t.get("parcelas", "1")
+        if "/" not in parcelas_str:
+            return 0
+        try:
+            n_atual, total = map(int, parcelas_str.split("/"))
+        except ValueError:
+            return 0
+
+        for i in range(n_atual + 1, total + 1):
+            nova_data = data_base + relativedelta(months=(i - n_atual))
+            if _ja_existe_no_mes(t["descricao"], t["responsavel"], nova_data.year, nova_data.month):
+                continue
+            novo = {**base,
+                    "data": nova_data.isoformat(),
+                    "parcelas": f"{i}/{total}",
+                    "status": "A pagar" if t["movimentacao"] == "Saída" else "A receber"}
+            try:
+                supabase.table(TABELA).insert(novo).execute()
+                inseridos += 1
+            except Exception as err:
+                print(f"[DB] Aviso recorrência Parcelado: {err}")
+
+    elif tipo == "D. Fixa":
+        horizonte = hoje + relativedelta(months=12)
+        proximo = data_base + relativedelta(months=1)
+        while proximo <= horizonte:
+            if not _ja_existe_no_mes(t["descricao"], t["responsavel"], proximo.year, proximo.month):
+                novo = {**base,
+                        "data": proximo.isoformat(),
+                        "status": "A pagar" if t["movimentacao"] == "Saída" else "A receber"}
+                try:
+                    supabase.table(TABELA).insert(novo).execute()
+                    inseridos += 1
+                except Exception as err:
+                    print(f"[DB] Aviso recorrência D.Fixa: {err}")
+            proximo += relativedelta(months=1)
+
+    print(f"[DB] Geradas {inseridos} recorrências para id={id_transacao} (tipo={tipo})")
+    return inseridos
+
+
+def gerar_recorrencias_retroativas():
+    """
+    Varre D. Fixa e Parcelado existentes e gera recorrências faltantes.
+    Para D. Fixa processa a partir da entrada mais antiga de cada série.
+    Para Parcelado processa a partir da menor parcela de cada série.
+    Retorna total de registros inseridos.
+    """
+    try:
+        resp = (
+            supabase.table(TABELA)
+            .select("*")
+            .in_("tipo", ["D. Fixa", "Parcelado"])
+            .order("data")
+            .execute()
+        )
+    except Exception as err:
+        raise RuntimeError(f"Falha ao listar recorrentes: {err}") from err
+
+    vistos_fixas = {}       # chave → id mais antigo
+    vistos_parcelados = {}  # chave → (n_menor, id)
+
+    for t in resp.data:
+        tipo = t["tipo"]
+        chave = (t["descricao"].lower().strip(), t["responsavel"])
+
+        if tipo == "D. Fixa":
+            if chave not in vistos_fixas:
+                vistos_fixas[chave] = t["id"]
+
+        elif tipo == "Parcelado":
+            parcelas_str = t.get("parcelas", "")
+            if "/" not in parcelas_str:
+                continue
+            try:
+                n, _ = map(int, parcelas_str.split("/"))
+            except ValueError:
+                continue
+            if chave not in vistos_parcelados or n < vistos_parcelados[chave][0]:
+                vistos_parcelados[chave] = (n, t["id"])
+
+    total_inseridos = 0
+
+    for chave, id_t in vistos_fixas.items():
+        try:
+            total_inseridos += gerar_recorrencias(id_t)
+        except Exception as err:
+            print(f"[DB] Aviso retroativo D.Fixa id={id_t}: {err}")
+
+    for chave, (_, id_t) in vistos_parcelados.items():
+        try:
+            total_inseridos += gerar_recorrencias(id_t)
+        except Exception as err:
+            print(f"[DB] Aviso retroativo Parcelado id={id_t}: {err}")
+
+    print(f"[DB] Retroativo concluído: {total_inseridos} transações geradas")
+    return total_inseridos
+
+
 if __name__ == "__main__":
     transacao_teste = {
         "movimentacao": "Saída",

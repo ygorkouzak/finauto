@@ -16,6 +16,7 @@ from db import (
     ler_pendencia_ativa,
     salvar_pendencia,
     remover_pendencia,
+    gerar_recorrencias,
 )
 
 # Máximo de perguntas de volta antes de forçar commit com defaults.
@@ -136,10 +137,20 @@ def whatsapp():
         id_novo = inserir_transacao(dados)
         if pendencia:
             remover_pendencia(from_numero)
+
+        # Gera recorrências automáticas para D. Fixa e Parcelado.
+        qtd_rec = 0
+        if dados.get("tipo") in ("D. Fixa", "Parcelado"):
+            try:
+                qtd_rec = gerar_recorrencias(id_novo)
+            except Exception as err:
+                print(f"[APP] Aviso recorrências: {err}")
+
+        sufixo_rec = f"\n+{qtd_rec} recorrências geradas." if qtd_rec else ""
         texto_resposta = (
             f"Registrado! (#{id_novo})\n"
             f"{dados['movimentacao']} de R$ {dados['valor']:.2f} "
-            f"em {dados['categoria']} ({dados['descricao']})"
+            f"em {dados['categoria']} ({dados['descricao']}){sufixo_rec}"
         )
 
     except PrecisaPerguntar as perg:
