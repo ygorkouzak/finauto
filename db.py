@@ -213,6 +213,93 @@ def listar_atrasadas(responsavel=None):
     except Exception as err:
         raise RuntimeError(f"Falha ao ler atrasadas: {err}") from err
 
+# ---------------------------------------------------------------------------
+# Pendências — perguntas de volta do classificador aguardando resposta.
+# Uma linha por telefone. TTL de 15 minutos aplicado aqui (não no banco).
+# ---------------------------------------------------------------------------
+TABELA_PENDENCIAS = "pendencias"
+PENDENCIA_TTL_MINUTOS = 15
+
+
+def ler_pendencia_ativa(telefone):
+    """
+    Devolve a pendência não expirada para o telefone, ou None.
+    Também limpa a linha se estiver fora do TTL.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    if not telefone:
+        return None
+
+    try:
+        resp = (
+            supabase.table(TABELA_PENDENCIAS)
+            .select("*")
+            .eq("telefone", telefone)
+            .limit(1)
+            .execute()
+        )
+    except Exception as err:
+        print(f"[DB] Aviso ler_pendencia: {err}")
+        return None
+
+    if not resp.data:
+        return None
+
+    linha = resp.data[0]
+    criado_em_str = linha.get("created_at") or ""
+    try:
+        # Supabase devolve ISO 8601 com timezone (ex: 2026-04-21T22:15:00+00:00)
+        criado_em = datetime.fromisoformat(criado_em_str.replace("Z", "+00:00"))
+    except ValueError:
+        print(f"[DB] Aviso: created_at fora do padrao: {criado_em_str!r}")
+        return None
+
+    agora = datetime.now(timezone.utc)
+    if agora - criado_em > timedelta(minutes=PENDENCIA_TTL_MINUTOS):
+        remover_pendencia(telefone)
+        return None
+
+    return linha
+
+
+def salvar_pendencia(telefone, mensagem, pergunta, tentativas, responsavel=None):
+    """
+    Upsert da pendência. Reinicia created_at a cada gravação.
+    `mensagem` é o texto acumulado (original + respostas anteriores concatenadas).
+    """
+    from datetime import datetime, timezone
+
+    if not telefone:
+        raise ValueError("telefone obrigatório para salvar pendência.")
+
+    payload = {
+        "telefone": telefone,
+        "mensagem": mensagem,
+        "pergunta": pergunta,
+        "tentativas": int(tentativas),
+        "responsavel": responsavel,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        supabase.table(TABELA_PENDENCIAS).upsert(payload, on_conflict="telefone").execute()
+    except Exception as err:
+        raise RuntimeError(f"Falha ao salvar pendência: {err}") from err
+
+    print(f"[DB] Pendência salva tel={telefone} tentativa={tentativas}")
+
+
+def remover_pendencia(telefone):
+    """Apaga a pendência do telefone (se existir). Nunca levanta erro."""
+    if not telefone:
+        return
+    try:
+        supabase.table(TABELA_PENDENCIAS).delete().eq("telefone", telefone).execute()
+        print(f"[DB] Pendência removida tel={telefone}")
+    except Exception as err:
+        print(f"[DB] Aviso remover_pendencia: {err}")
+
+
 def marcar_como_quitado(id_transacao, movimentacao):
     """
     Muda status para 'Pago' (Saída) ou 'Recebido' (Entrada).
@@ -223,7 +310,8 @@ def marcar_como_quitado(id_transacao, movimentacao):
     except Exception as err:
         raise RuntimeError(f"Falha ao quitar: {err}") from err
 
-    print(f"[DB] Quitado id={id_transacao} → {novo_status}")
+    print(f"[DB] Quitado id={id_transacao} -> {novo_status}")
+
 
 if __name__ == "__main__":
     transacao_teste = {

@@ -3,8 +3,25 @@ import requests as http_requests
 from requests.auth import HTTPBasicAuth
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
-from ia import extrair_dados_com_ia, extrair_dados_com_ia_imagem, extrair_dados_com_ia_audio
-from db import inserir_transacao, listar_categorias, buscar_historico
+from ia import (
+    extrair_dados_com_ia,
+    extrair_dados_com_ia_imagem,
+    extrair_dados_com_ia_audio,
+    PrecisaPerguntar,
+)
+from db import (
+    inserir_transacao,
+    listar_categorias,
+    buscar_historico,
+    ler_pendencia_ativa,
+    salvar_pendencia,
+    remover_pendencia,
+)
+
+# Máximo de perguntas de volta antes de forçar commit com defaults.
+# Na tentativa N, a IA ainda pode perguntar; na tentativa N+1 ela é
+# obrigada a entregar a transação com base no que tem.
+MAX_PERGUNTAS = 3
 
 app = Flask(__name__)
 
@@ -37,6 +54,33 @@ def whatsapp():
     if not mensagem_recebida and num_media == 0:
         return ("", 204)
 
+    # --- Continuação de pendência? -----------------------------------------
+    # Só se aplica a mensagens de TEXTO (não faz sentido responder pergunta
+    # com áudio/imagem neste fluxo).
+    pendencia = None
+    tentativa_atual = 1
+    mensagem_acumulada = mensagem_recebida
+
+    if num_media == 0 and mensagem_recebida:
+        try:
+            pendencia = ler_pendencia_ativa(from_numero)
+        except Exception as err:
+            print(f"[APP] Aviso ler_pendencia: {err}")
+
+        if pendencia:
+            tentativa_atual = int(pendencia.get("tentativas", 1)) + 1
+            mensagem_anterior = pendencia.get("mensagem", "")
+            pergunta_anterior = pendencia.get("pergunta", "")
+            # Concatena contexto original + pergunta feita + resposta nova
+            mensagem_acumulada = (
+                f"{mensagem_anterior} | {pergunta_anterior} Resposta: {mensagem_recebida}"
+            )
+            print(f"[APP] Continuando pendência (tentativa {tentativa_atual}). "
+                  f"Mensagem acumulada: {mensagem_acumulada!r}")
+
+    # Nesta tentativa, ainda permitimos pergunta se não estouramos o limite.
+    permitir_pergunta = tentativa_atual <= MAX_PERGUNTAS
+
     try:
         # Categorias e histórico — falhas não bloqueiam o registro
         try:
@@ -47,7 +91,7 @@ def whatsapp():
             cats_saida, cats_entrada = [], []
 
         try:
-            texto_busca = mensagem_recebida or ""
+            texto_busca = mensagem_acumulada or ""
             historico = buscar_historico(texto_busca) if texto_busca else []
             if historico:
                 print(f"[APP] Histórico encontrado: {[h.get('descricao') for h in historico]}")
@@ -60,6 +104,7 @@ def whatsapp():
             categorias_entrada=cats_entrada,
             responsavel=responsavel,
             historico=historico or None,
+            permitir_pergunta=permitir_pergunta,
         )
 
         if num_media > 0 and media_url:
@@ -85,15 +130,47 @@ def whatsapp():
                     mensagem_recebida, r.content, media_type or "image/jpeg", **kwargs_ia
                 )
         else:
-            dados = extrair_dados_com_ia(mensagem_recebida, **kwargs_ia)
+            dados = extrair_dados_com_ia(mensagem_acumulada, **kwargs_ia)
+
+        # Sucesso: grava transação e limpa pendência (se houver).
         id_novo = inserir_transacao(dados)
+        if pendencia:
+            remover_pendencia(from_numero)
         texto_resposta = (
             f"Registrado! (#{id_novo})\n"
             f"{dados['movimentacao']} de R$ {dados['valor']:.2f} "
             f"em {dados['categoria']} ({dados['descricao']})"
         )
+
+    except PrecisaPerguntar as perg:
+        # A IA quer perguntar algo. Salva pendência e devolve a pergunta.
+        # Se já estamos na última tentativa, não deveria acontecer (prompt
+        # proíbe), mas se acontecer por acaso, forçamos commit.
+        if tentativa_atual > MAX_PERGUNTAS:
+            print(f"[APP] IA insistiu em perguntar na tentativa {tentativa_atual}. "
+                  "Desistindo e pedindo reformulação.")
+            if pendencia:
+                remover_pendencia(from_numero)
+            texto_resposta = "Não consegui entender a transação. Reformule a mensagem."
+        else:
+            try:
+                salvar_pendencia(
+                    telefone=from_numero,
+                    mensagem=mensagem_acumulada,
+                    pergunta=perg.pergunta,
+                    tentativas=tentativa_atual,
+                    responsavel=responsavel,
+                )
+                texto_resposta = perg.pergunta
+                print(f"[APP] IA perguntou: {perg.pergunta!r} (tentativa {tentativa_atual}/{MAX_PERGUNTAS})")
+            except Exception as err:
+                print(f"[APP] Falha ao salvar pendência: {err}")
+                texto_resposta = "Não consegui armazenar a conversa. Reformule a mensagem completa."
+
     except ValueError as err:
         print(f"[APP] Dados inválidos: {err}")
+        if pendencia:
+            remover_pendencia(from_numero)
         texto_resposta = "Não consegui entender a transação. Reformule a mensagem."
     except RuntimeError as err:
         print(f"[APP] Falha técnica: {err}")

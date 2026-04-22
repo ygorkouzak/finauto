@@ -29,6 +29,13 @@ TIPOS_SAIDA = {"P. Unico", "D. Fixa", "Parcelado"}
 TIPOS_ENTRADA = {"Receita Fixa", "Receita Variável"}
 
 
+class PrecisaPerguntar(Exception):
+    """Sinaliza que a IA devolveu {"precisa_perguntar": true, "pergunta": ...}."""
+    def __init__(self, pergunta):
+        super().__init__(pergunta)
+        self.pergunta = pergunta
+
+
 def _validar(dados):
     """Confere o dict contra o schema. Devolve lista de problemas (vazia = OK)."""
     # Primeiro checa campos faltando. Se algum faltar, retornamos só isso —
@@ -64,7 +71,7 @@ def _validar(dados):
             problemas.append(f"tipo de Entrada inválido: {tipo!r}")
         if dados["status"] not in status_entrada_validos:
             problemas.append(f"status de Entrada inválido: {dados['status']!r}")
-            
+
     # Data precisa bater no formato AAAA-MM-DD.
     try:
         datetime.strptime(str(dados["data"]), "%Y-%m-%d")
@@ -83,7 +90,8 @@ def _validar(dados):
     return problemas
 
 
-def _instrucoes_enum(data_hoje, cats_saida, cats_entrada, responsavel, historico):
+def _instrucoes_enum(data_hoje, cats_saida, cats_entrada, responsavel, historico,
+                     permitir_pergunta=True):
     """Monta o bloco de regras comuns para todos os prompts."""
     if responsavel:
         resp_regra = (
@@ -114,6 +122,28 @@ def _instrucoes_enum(data_hoje, cats_saida, cats_entrada, responsavel, historico
             + "\nSe a mensagem mencionar algo do histórico, replique a classificação exata."
         )
 
+    # Bloco de pergunta de volta: só aparece quando permitir_pergunta=True.
+    # Quando permitir_pergunta=False (última tentativa), o modelo é instruído
+    # a se virar com defaults e nunca mais perguntar.
+    if permitir_pergunta:
+        pergunta_bloco = """
+POLÍTICA DE PERGUNTAS DE VOLTA:
+Antes de perguntar qualquer coisa, você DEVE tentar, nesta ordem:
+  1. Aplicar os defaults já listados: responsavel injetado, fonte="Dinheiro", status="Pago"/"Recebido", data=hoje, parcelas="1", tipo="P. Unico"/"Receita Variável".
+  2. Casar a descrição com o HISTÓRICO acima.
+  3. Inferir categoria a partir do vocabulário (mercado→Alimentação, ifood→Alimentação, posto/gasolina→Transporte, Spotify/Canva/iCloud→Assinaturas, etc).
+Se — e SOMENTE se — ainda assim faltar um dado essencial que mude a classificação (tipicamente o valor, ou em casos ambíguos a categoria), devolva EXATAMENTE este JSON:
+  {"precisa_perguntar": true, "pergunta": "<pergunta curta em português, com 2-3 opções quando fizer sentido>"}
+Regras da pergunta:
+  - Uma pergunta só. Direta. Sem saudação, sem desculpa.
+  - Nunca pergunte algo que um default resolve.
+  - Nunca pergunte mais de um campo por vez.
+  - Se a mensagem já tem tudo, NÃO pergunte — devolva o JSON completo da transação."""
+    else:
+        pergunta_bloco = """
+POLÍTICA: esta é a ÚLTIMA tentativa. É PROIBIDO devolver {"precisa_perguntar": ...}.
+Aplique defaults e chute a melhor opção válida dentro dos enums e categorias permitidas. Entregue o JSON completo da transação, custe o que custar."""
+
     return f"""
 REGRA CRÍTICA: campos com valores fixos aceitam EXATAMENTE os valores listados — nenhum outro.
 
@@ -133,18 +163,23 @@ REGRA CRÍTICA: campos com valores fixos aceitam EXATAMENTE os valores listados 
     Saída → EXATAMENTE "Pago", "A pagar" ou "Atrasado".
     Entrada → EXATAMENTE "Recebido", "A receber" ou "Atrasado".
     Se não informado → "Pago" (Saída) ou "Recebido" (Entrada).
-{historico_bloco}"""
+{historico_bloco}
+{pergunta_bloco}"""
 
 
 def extrair_dados_com_ia(mensagem, categorias_saida=None, categorias_entrada=None,
-                         responsavel=None, historico=None):
-    """Recebe mensagem em português e devolve um dict validado com a transação."""
+                         responsavel=None, historico=None, permitir_pergunta=True):
+    """Recebe mensagem em português e devolve um dict validado com a transação.
+
+    Pode levantar `PrecisaPerguntar` quando `permitir_pergunta=True` e a IA
+    decidir que falta informação essencial.
+    """
     if not mensagem or not mensagem.strip():
         raise ValueError("Mensagem vazia.")
 
     data_hoje = datetime.now().strftime("%Y-%m-%d")
     instrucoes = _instrucoes_enum(data_hoje, categorias_saida, categorias_entrada,
-                                  responsavel, historico)
+                                  responsavel, historico, permitir_pergunta)
 
     prompt = f"""Você é um assistente financeiro. Extraia a transação da mensagem abaixo e devolva APENAS um JSON válido.
 Hoje é {data_hoje}.
@@ -155,6 +190,7 @@ Exemplos:
 Entrada "gastei 27,50 no ifood hoje" → {{"movimentacao":"Saída","responsavel":"Y","tipo":"P. Unico","categoria":"Alimentação","descricao":"iFood","valor":27.50,"parcelas":"1","data":"{data_hoje}","fonte":"Dinheiro","status":"Pago"}}
 Entrada "comprei fone 800 em 4x no cartão" → {{"movimentacao":"Saída","responsavel":"Y","tipo":"Parcelado","categoria":"Compras On","descricao":"Fone","valor":200.00,"parcelas":"1/4","data":"{data_hoje}","fonte":"Cartão Crédito","status":"Pago"}}
 Entrada "recebi 1900 da Alvank" → {{"movimentacao":"Entrada","responsavel":"Y","tipo":"Receita Variável","categoria":"Freelancer","descricao":"Alvank","valor":1900.00,"parcelas":"1","data":"{data_hoje}","fonte":"Dinheiro","status":"Recebido"}}
+Pergunta "gastei uns trocados no Arthur" → {{"precisa_perguntar":true,"pergunta":"Quanto você gastou com o Arthur? (valor em R$)"}}
 """
 
     return _chamar_gemini_e_validar(prompt, categorias_saida, categorias_entrada, "texto")
@@ -185,6 +221,13 @@ def _chamar_gemini_e_validar(contents, categorias_saida, categorias_entrada, tip
             raise ValueError("Gemini devolveu lista vazia.")
         dados = dados[0]
 
+    # Branch de pergunta de volta: a IA sinalizou que precisa de mais info.
+    if isinstance(dados, dict) and dados.get("precisa_perguntar") is True:
+        pergunta = dados.get("pergunta")
+        if not isinstance(pergunta, str) or not pergunta.strip():
+            raise ValueError("IA marcou precisa_perguntar mas não enviou pergunta.")
+        raise PrecisaPerguntar(pergunta.strip())
+
     problemas = _validar(dados)
     if problemas:
         raise ValueError("JSON fora do schema: " + "; ".join(problemas))
@@ -201,11 +244,11 @@ def _chamar_gemini_e_validar(contents, categorias_saida, categorias_entrada, tip
 
 def extrair_dados_com_ia_imagem(mensagem, bytes_imagem, tipo_mime="image/jpeg",
                                 categorias_saida=None, categorias_entrada=None,
-                                responsavel=None, historico=None):
+                                responsavel=None, historico=None, permitir_pergunta=True):
     """Extrai dados de transação a partir de bytes de imagem (nota fiscal, comprovante)."""
     data_hoje = datetime.now().strftime("%Y-%m-%d")
     instrucoes = _instrucoes_enum(data_hoje, categorias_saida, categorias_entrada,
-                                  responsavel, historico)
+                                  responsavel, historico, permitir_pergunta)
     prompt_texto = (
         f"Você é um assistente financeiro. Analise a imagem (nota fiscal, comprovante ou foto de despesa).\n"
         f"Hoje é {data_hoje}. Mensagem adicional: \"{mensagem}\"\n"
@@ -219,11 +262,11 @@ def extrair_dados_com_ia_imagem(mensagem, bytes_imagem, tipo_mime="image/jpeg",
 
 def extrair_dados_com_ia_audio(mensagem, bytes_audio, tipo_mime="audio/ogg",
                                categorias_saida=None, categorias_entrada=None,
-                               responsavel=None, historico=None):
+                               responsavel=None, historico=None, permitir_pergunta=True):
     """Extrai dados de transação a partir de áudio (mensagem de voz do WhatsApp)."""
     data_hoje = datetime.now().strftime("%Y-%m-%d")
     instrucoes = _instrucoes_enum(data_hoje, categorias_saida, categorias_entrada,
-                                  responsavel, historico)
+                                  responsavel, historico, permitir_pergunta)
     prompt_texto = (
         f"Você é um assistente financeiro. Transcreva o áudio e extraia a transação financeira mencionada.\n"
         f"Hoje é {data_hoje}. Texto adicional do usuário: \"{mensagem}\"\n"
