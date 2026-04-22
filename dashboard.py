@@ -334,7 +334,7 @@ def _render_lista_com_quitar(titulo, transacoes, chave_prefix):
         cor = "🔴" if linha["movimentacao"] == "Saída" else "🟢"
         label_btn = "✅ Pago" if linha["movimentacao"] == "Saída" else "✅ Recebido"
 
-        cols_row = st.columns([4, 1, 1, 1]) if chave_prefix == "prox" else st.columns([4, 1, 1])
+        cols_row = st.columns([4, 1, 1])
         with cols_row[0]:
             st.markdown(
                 f"{cor} **{linha['data']}** — {linha['descricao']} "
@@ -345,34 +345,13 @@ def _render_lista_com_quitar(titulo, transacoes, chave_prefix):
         with cols_row[1]:
             if st.button("✏️", key=f"edit_{chave_prefix}_{linha['id']}", width="stretch"):
                 modal_editar_transacao(dict(linha))
-        if chave_prefix == "prox":
-            with cols_row[2]:
-                if st.button("📱", key=f"lembrete_{linha['id']}", width="stretch",
-                             help="Enviar lembrete WhatsApp"):
-                    try:
-                        sid = enviar_lembrete_twilio(
-                            linha["responsavel"],
-                            linha["data"],
-                            linha["descricao"],
-                        )
-                        st.success(f"Lembrete enviado! ({sid[:8]}…)")
-                    except RuntimeError as err:
-                        st.error(str(err))
-            with cols_row[3]:
-                if st.button(label_btn, key=f"{chave_prefix}_{linha['id']}", width="stretch"):
-                    try:
-                        marcar_como_quitado(int(linha["id"]), linha["movimentacao"])
-                        st.rerun()
-                    except RuntimeError as err:
-                        st.error(f"Erro: {err}")
-        else:
-            with cols_row[2]:
-                if st.button(label_btn, key=f"{chave_prefix}_{linha['id']}", width="stretch"):
-                    try:
-                        marcar_como_quitado(int(linha["id"]), linha["movimentacao"])
-                        st.rerun()
-                    except RuntimeError as err:
-                        st.error(f"Erro: {err}")
+        with cols_row[2]:
+            if st.button(label_btn, key=f"{chave_prefix}_{linha['id']}", width="stretch"):
+                try:
+                    marcar_como_quitado(int(linha["id"]), linha["movimentacao"])
+                    st.rerun()
+                except RuntimeError as err:
+                    st.error(f"Erro: {err}")
 
 
 atrasadas = listar_atrasadas(responsavel=resp_filtro)
