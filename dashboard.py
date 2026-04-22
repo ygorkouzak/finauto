@@ -334,18 +334,15 @@ def _render_lista_com_quitar(titulo, transacoes, chave_prefix):
         cor = "🔴" if linha["movimentacao"] == "Saída" else "🟢"
         label_btn = "✅ Pago" if linha["movimentacao"] == "Saída" else "✅ Recebido"
 
-        cols_row = st.columns([4, 1, 1])
-        with cols_row[0]:
+        col_info, col_btn = st.columns([4, 1])
+        with col_info:
             st.markdown(
                 f"{cor} **{linha['data']}** — {linha['descricao']} "
                 f"({linha['categoria']}) — "
                 f"{formatar_moeda(linha['valor']).replace('$', chr(92) + '$')} "
                 f"· {linha['responsavel']}"
             )
-        with cols_row[1]:
-            if st.button("✏️", key=f"edit_{chave_prefix}_{linha['id']}", width="stretch"):
-                modal_editar_transacao(dict(linha))
-        with cols_row[2]:
+        with col_btn:
             if st.button(label_btn, key=f"{chave_prefix}_{linha['id']}", width="stretch"):
                 try:
                     marcar_como_quitado(int(linha["id"]), linha["movimentacao"])
