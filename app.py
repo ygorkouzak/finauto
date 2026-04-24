@@ -134,6 +134,7 @@ def whatsapp():
             dados = extrair_dados_com_ia(mensagem_acumulada, **kwargs_ia)
 
         # Sucesso: grava transação e limpa pendência (se houver).
+        dados["telefone"] = from_numero
         id_novo = inserir_transacao(dados)
         if pendencia:
             remover_pendencia(from_numero)

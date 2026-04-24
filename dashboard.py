@@ -898,7 +898,12 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 colunas_visiveis = ["id", "data", "movimentacao", "categoria", "descricao",
-                    "valor", "responsavel", "fonte", "parcelas", "status"]
+                    "valor", "responsavel", "telefone", "fonte", "parcelas", "status"]
+
+# `telefone` pode não existir em linhas antigas — garante a coluna no df
+if "telefone" not in df_tabela.columns:
+    df_tabela = df_tabela.copy()
+    df_tabela["telefone"] = None
 
 df_editavel = df_tabela[colunas_visiveis].copy()
 df_editavel["data"] = df_editavel["data"].apply(lambda d: d.strftime("%d/%m/%Y"))
@@ -910,7 +915,7 @@ editado = st.data_editor(
     df_editavel,
     width="stretch",
     hide_index=True,
-    disabled=["id", "data"],
+    disabled=["id", "data", "telefone"],
     column_config={
         "movimentacao": st.column_config.SelectboxColumn(
             options=["Entrada", "Saída"], required=True),
@@ -924,6 +929,7 @@ editado = st.data_editor(
         "categoria": st.column_config.SelectboxColumn(
             options=_cats_tabela, required=True) if _cats_tabela else None,
         "valor": st.column_config.NumberColumn(format="R$ %.2f", min_value=0.01),
+        "telefone": st.column_config.TextColumn("Telefone", disabled=True),
         "excluir": st.column_config.CheckboxColumn("🗑️"),
     },
     key="tabela_edicao",
