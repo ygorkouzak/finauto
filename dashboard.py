@@ -50,7 +50,7 @@ mes = st.sidebar.selectbox("Mês", list(range(1, 13)), index=mes_atual-1, format
 ano = st.sidebar.selectbox("Ano", [ano_atual, ano_atual-1], index=0)
 
 # --- Carregamento de Dados ---
-df = listar_transacoes(ano=ano, mes=mes)
+df = pd.DataFrame(listar_transacoes(ano=ano, mes=mes))
 
 if df.empty:
     st.warning(f"Nenhuma transação encontrada para {calendar.month_name[mes]}/{ano}.")
